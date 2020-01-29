@@ -308,12 +308,21 @@ v_sqlnumber in number)
     
 begin
 
-  select t.PLAN_TABLE_OUTPUT 
-  into planoutput 
-  from table(dbms_xplan.display('PLAN_TABLE',v_test_name||to_char(v_sqlnumber),'BASIC')) t
-  where t.plan_table_output like 'Plan%';
-  
-  plan_hash_value:=to_number(substr(planoutput,18));
+-- check for failed explain plan - 0 plan_hash_value
+
+  begin
+    select t.PLAN_TABLE_OUTPUT 
+    into planoutput 
+    from table(dbms_xplan.display('PLAN_TABLE',v_test_name||to_char(v_sqlnumber),'BASIC')) t
+    where t.plan_table_output like 'Plan%';
+    
+    plan_hash_value := to_number(substr(planoutput,18));
+  EXCEPTION
+    WHEN others THEN
+      DBMS_OUTPUT.put_line('Error getting plan in update_explain_plan_hash on SQL number '||v_sqlnumber);
+      DBMS_OUTPUT.put_line(SQLERRM);
+      plan_hash_value := 0;
+  end;
 
   select count(*) into row_cnt
   from test_results t
@@ -373,7 +382,6 @@ begin
           DBMS_SQL.PARSE (clob_cursor,sqlclob,DBMS_SQL.NATIVE);
           ignored_value := DBMS_SQL.EXECUTE(clob_cursor);
           DBMS_SQL.CLOSE_CURSOR (clob_cursor);
- 
           update_explain_plan_hash(test_name,SQL_REC.sqlnumber);
           DBMS_OUTPUT.put_line('Plan explained for SQL number '||SQL_REC.sqlnumber);
           
@@ -404,16 +412,24 @@ procedure runselect(
     planoutput clob;
     plan_hash_value number;
     cursor_child_no number;
+    
     b_CPU_used_by_this_session number;
     b_consistent_gets number;
     b_db_block_gets number;
     b_parse_time_elapsed number;
     b_physical_reads number;
+    b_user_commits number;
+    b_db_block_changes number;
+
     a_CPU_used_by_this_session number;
     a_consistent_gets number;
     a_db_block_gets number;
     a_parse_time_elapsed number;
     a_physical_reads number;
+    a_user_commits number;
+    a_db_block_changes number;
+
+    v_dummy varchar2(1);
 
 BEGIN
     select sysdate into before_date from dual;
@@ -421,28 +437,36 @@ BEGIN
 -- record current values of session statistics
 
     select
-    s1.value CPU_used_by_this_session,
-    s2.value consistent_gets,
-    s3.value db_block_gets,
-    s4.value parse_time_elapsed,
-    s5.value physical_reads
+    max(s1.value) CPU_used_by_this_session,
+    max(s2.value) consistent_gets,
+    max(s3.value) db_block_gets,
+    max(s4.value) parse_time_elapsed,
+    max(s5.value) physical_reads,
+    max(s6.value) user_commits,
+    max(s7.value) db_block_changes
     into
     b_CPU_used_by_this_session,
     b_consistent_gets,
     b_db_block_gets,
     b_parse_time_elapsed,
-    b_physical_reads
+    b_physical_reads,
+    b_user_commits,
+    b_db_block_changes
     from 
     v$mystat s1, 
     v$mystat s2, 
     v$mystat s3, 
     v$mystat s4, 
     v$mystat s5, 
+    v$mystat s6, 
+    v$mystat s7, 
     V$STATNAME n1,
     V$STATNAME n2,
     V$STATNAME n3,
     V$STATNAME n4,
-    V$STATNAME n5
+    V$STATNAME n5,
+    V$STATNAME n6,
+    V$STATNAME n7
     where
     s1.STATISTIC#=n1.STATISTIC# and
     n1.name = 'CPU used by this session' and
@@ -453,11 +477,17 @@ BEGIN
     s4.STATISTIC#=n4.STATISTIC# and
     n4.name = 'parse time elapsed' and
     s5.STATISTIC#=n5.STATISTIC# and
-    n5.name = 'physical reads';
+    n5.name = 'physical reads' and
+    s6.STATISTIC#=n6.STATISTIC# and
+    n6.name = 'user commits' and
+    s7.STATISTIC#=n7.STATISTIC# and
+    n7.name = 'db block changes';
         
     clob_cursor := DBMS_SQL.OPEN_CURSOR;
     
     DBMS_SQL.PARSE (clob_cursor,sqlclob,DBMS_SQL.NATIVE);
+    
+    DBMS_SQL.DEFINE_COLUMN(clob_cursor,1,v_dummy,1);
     
     rows_fetched := DBMS_SQL.EXECUTE_AND_FETCH (clob_cursor);
     total_rows_fetched := rows_fetched;
@@ -474,39 +504,40 @@ BEGIN
     into query_sql_id,cursor_child_no
     from v$session 
     where audsid=USERENV('SESSIONID');
-
-    select t.PLAN_TABLE_OUTPUT 
-    into planoutput 
-    from table(dbms_xplan.display_cursor(query_sql_id,cursor_child_no,'BASIC')) t
-    where t.plan_table_output like 'Plan%';
-  
-    plan_hash_value:=to_number(substr(planoutput,18));
-    
+   
 -- record current values of session statistics
 
     select
-    s1.value CPU_used_by_this_session,
-    s2.value consistent_gets,
-    s3.value db_block_gets,
-    s4.value parse_time_elapsed,
-    s5.value physical_reads
+    max(s1.value) CPU_used_by_this_session,
+    max(s2.value) consistent_gets,
+    max(s3.value) db_block_gets,
+    max(s4.value) parse_time_elapsed,
+    max(s5.value) physical_reads,
+    max(s6.value) user_commits,
+    max(s7.value) db_block_changes
     into
     a_CPU_used_by_this_session,
     a_consistent_gets,
     a_db_block_gets,
     a_parse_time_elapsed,
-    a_physical_reads
+    a_physical_reads,
+    a_user_commits,
+    a_db_block_changes
     from 
     v$mystat s1, 
     v$mystat s2, 
     v$mystat s3, 
     v$mystat s4, 
     v$mystat s5, 
+    v$mystat s6, 
+    v$mystat s7, 
     V$STATNAME n1,
     V$STATNAME n2,
     V$STATNAME n3,
     V$STATNAME n4,
-    V$STATNAME n5
+    V$STATNAME n5,
+    V$STATNAME n6,
+    V$STATNAME n7
     where
     s1.STATISTIC#=n1.STATISTIC# and
     n1.name = 'CPU used by this session' and
@@ -517,11 +548,33 @@ BEGIN
     s4.STATISTIC#=n4.STATISTIC# and
     n4.name = 'parse time elapsed' and
     s5.STATISTIC#=n5.STATISTIC# and
-    n5.name = 'physical reads';
-        
+    n5.name = 'physical reads' and
+    s6.STATISTIC#=n6.STATISTIC# and
+    n6.name = 'user commits' and
+    s7.STATISTIC#=n7.STATISTIC# and
+    n7.name = 'db block changes';
+    
+-- check for failed explain plan - 0 plan_hash_value
+
+    begin
+      select t.PLAN_TABLE_OUTPUT 
+      into planoutput 
+      from table(dbms_xplan.display_cursor(query_sql_id,cursor_child_no,'BASIC')) t
+      where t.plan_table_output like 'Plan%';
+    
+      plan_hash_value:=to_number(substr(planoutput,18));
+    EXCEPTION
+      WHEN others THEN
+        DBMS_OUTPUT.put_line('Error getting plan in runselect on SQL number '||v_sqlnumber);
+        DBMS_OUTPUT.put_line(SQLERRM);
+        plan_hash_value := 0;
+    end;
+                
     select sysdate into after_date from dual;
     
     elapsed_time_seconds := (after_date-before_date)*24*3600;
+    
+    rollback;
     
     select count(*) into row_cnt
     from test_results t
@@ -540,7 +593,9 @@ BEGIN
         consistent_gets=a_consistent_gets-b_consistent_gets,
         db_block_gets=a_db_block_gets-b_db_block_gets,
         parse_time_elapsed=a_parse_time_elapsed-b_parse_time_elapsed,
-        physical_reads=a_physical_reads-b_physical_reads
+        physical_reads=a_physical_reads-b_physical_reads,
+        user_commits=a_user_commits-b_user_commits,
+        db_block_changes=a_db_block_changes-b_db_block_changes
       where 
         t.test_name=v_test_name and
         t.sqlnumber=v_sqlnumber;
@@ -548,7 +603,7 @@ BEGIN
       insert into test_results 
       (test_name,sqlnumber,rows_fetched,elapsed_in_seconds,sql_id,execute_plan_hash,
        CPU_used_by_this_session,consistent_gets,db_block_gets,parse_time_elapsed,
-       physical_reads)
+       physical_reads,user_commits,db_block_changes)
       values (
         v_test_name,
         v_sqlnumber,
@@ -560,7 +615,9 @@ BEGIN
         a_consistent_gets-b_consistent_gets,
         a_db_block_gets-b_db_block_gets,
         a_parse_time_elapsed-b_parse_time_elapsed,
-        a_physical_reads-b_physical_reads);
+        a_physical_reads-b_physical_reads,
+        a_user_commits-b_user_commits,
+        a_db_block_changes-b_db_block_changes);
     end if;
     
     commit;
